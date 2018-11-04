@@ -3,7 +3,7 @@ import asyncio
 import functools
 import time
 
-from mlq import MLQ
+from mlq.queue import MLQ
 
 
 parser = argparse.ArgumentParser(description='Controller app for MLQ')
@@ -28,24 +28,25 @@ def my_consumer_func(msg, *args):
 
 async def main(command, namespace, redis_host):
     mlq = MLQ(namespace, redis_host, 6379, 0)
-    if args.cmd == 'clear_all':
+    if command == 'clear_all':
         print('Clearing everything in namespace {}'.format(namespace))
         for key in mlq.redis.scan_iter("{}*".format(namespace)):
             mlq.redis.delete(key)
-    elif args.cmd == 'test_consumer':
+    elif command == 'test_consumer':
         print('Starting test consumer')
         mlq.create_listener(my_consumer_func)
-    elif args.cmd == 'test_producer':
+    elif command == 'test_producer':
         print('Starting test producer')
         mlq.loop.run_in_executor(mlq.pool, functools.partial(my_producer_func, mlq))
-    elif args.cmd == 'test_reaper':
+    elif command == 'test_reaper':
          print('Starting test reaper')
          mlq.create_reaper()
-    elif args.cmd == 'test_all':
+    elif command == 'test_all':
          print('Starting all dummy services')
          mlq.create_listener(my_consumer_func)
          mlq.loop.run_in_executor(mlq.pool, functools.partial(my_producer_func, mlq))
          mlq.create_reaper()
+    return mlq
 
 if __name__ == '__main__':
     args = parser.parse_args()
