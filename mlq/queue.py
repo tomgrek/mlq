@@ -3,12 +3,15 @@ import concurrent.futures
 from datetime import datetime as dt
 import functools
 import logging
+import json
+import pickle
 import time
 from uuid import uuid1 as uuid
 
 import msgpack
 import redis
-
+import jsonpickle
+import cloudpickle
 
 class MLQ():
     """Create a queue object"""
@@ -17,6 +20,7 @@ class MLQ():
         self.processing_q = self.q_name + '_processing'
         self.progress_q = self.q_name + '_progress'
         self.jobs_refs_q = self.q_name + '_jobsrefs'
+        self.dead_letter_q = self.q_name + '_deadletter'
         # msgs have a 64 bit id starting at 0
         self.id_key = self.q_name + '_max_id'
         self.id = str(uuid())
@@ -24,6 +28,20 @@ class MLQ():
         self.redis = redis.StrictRedis(host=redis_host, port=redis_port, db=redis_db, decode_responses=True)
         logging.info('Connected to Redis at {}:{}'.format(redis_host, redis_port))
         self.pool = concurrent.futures.ThreadPoolExecutor()
+        self.funcs_to_execute = []
+        self.listener = None
+
+    def remove_listener(self, function):
+        """Remove a function from the execution schedule of a worker upon msg.
+        Workers' functions must be unique by name."""
+        if isinstance(function, dict):
+            fun_bytes = jsonpickle.decode(json.dumps(function))
+            function = cloudpickle.loads(fun_bytes)
+        for func in self.funcs_to_execute:
+            if func.__name__ == function.__name__:
+                self.funcs_to_execute.remove(func)
+                return True
+        return False
 
     def create_listener(self, function):
         """Create a MLQ consumer that executes `function` on message received.
@@ -32,7 +50,22 @@ class MLQ():
         to the entire message object (worker id, timestamp, retries etc)
         If there are multiple consumers, they get messages round-robin
         """
-        def listener(function):
+        # TODO: need an array of functions for this listener to listen to.
+        # and probably should be able to specify which worker will do what
+        # functions. So also need an endpoint to get worker name.
+        if isinstance(function, dict):
+            # How to get this: define function in python,
+            # json.loads(jsonpickle.encode(cloudpickle.dumps(g)))
+            # then, if using via curl, make it valid json (replace ' with ")
+            # then curl localhost:5000/consumer -X "POST" -H "Content-Type: application/json" -d '{"py/b64": " etc......
+            # or, if using via urllib3, even better (where g is the function):
+            # http.request('POST', 'localhost:5000/consumer', headers={'Content-Type': 'application/json'}, body=jsonpickle.encode(cloudpickle.dumps(g)))
+            fun_bytes = jsonpickle.decode(json.dumps(function))
+            function = cloudpickle.loads(fun_bytes)
+        self.funcs_to_execute.append(function)
+        if self.listener:
+            return True
+        def listener():
             while True:
                 msg_str = self.redis.brpoplpush(self.q_name, self.processing_q, timeout=0)
                 msg_dict = msgpack.unpackb(msg_str, raw=False)
@@ -42,14 +75,28 @@ class MLQ():
                 new_record = msgpack.packb(msg_dict, use_bin_type=False)
                 self.redis.set(self.progress_q + '_' + str(msg_dict['id']), new_record)
                 # process msg ...
-                function(msg_dict['msg'], msg_dict)
-                # end processing message
-                # remove from progress_q ?? or keep along with result????
-                print('completed job!', str(msg_dict['id']))
+                all_ok = True
+                for func in self.funcs_to_execute:
+                    try:
+                        func(msg_dict['msg'], msg_dict)
+                        # end processing message
+                        # remove from progress_q ?? or keep along with result????
+                    except Exception as e:
+                        all_ok = False
+                        logging.error(e)
+                        logging.info("Moving message {} to dead letter queue".format(msg_dict['id']))
+                        self.redis.rpush(self.dead_letter_q, msg_str)
+                if all_ok:
+                    logging.info('Completed job {}'.format(str(msg_dict['id'])))
                 self.redis.delete(self.progress_q + '_' + str(msg_dict['id']))
                 self.redis.lrem(self.processing_q, -1, msg_str)
                 self.redis.lrem(self.jobs_refs_q, 1, str(msg_dict['id']))
-        self.loop.run_in_executor(self.pool, functools.partial(listener, function))
+        logging.info('created listener')
+        self.listener = self.loop.run_in_executor(self.pool, listener)
+        return True
+
+    def job_count(self):
+        return self.redis.llen(self.q_name)
 
     def create_reaper(self, call_how_often=1, job_timeout=30):
         """A thread to reap jobs that were too slow
@@ -103,7 +150,7 @@ class MLQ():
     def post(self, msg, callback=None):
         msg_id = str(self.redis.incr(self.id_key))
         timestamp = dt.timestamp(dt.utcnow())
-        logging.info('Posting message with id {} to queue at {}'.format(msg_id, timestamp))
+        logging.info('Posting message with id {} to {} at {}'.format(msg_id, self.q_name, timestamp))
         pipeline = self.redis.pipeline()
         pipeline.rpush(self.jobs_refs_q, msg_id)
         job = {
