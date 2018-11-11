@@ -6,32 +6,35 @@ from threading import Thread
 import time
 
 from flask import Flask, request
+from gevent.pywsgi import WSGIServer
 import msgpack
+from werkzeug.exceptions import NotFound
 
 from mlq.queue import MLQ
 
-
-parser = argparse.ArgumentParser(description='Controller app for MLQ')
-parser.add_argument('cmd', metavar='command', type=str,
-                    help='Command to run.', choices=['test_producer', \
-                    'test_consumer', 'test_reaper', 'test_all', 'clear_all',
-                    'post', 'consumer'])
-parser.add_argument('msg', metavar='message', type=str,
-                    help='Message to post.', nargs='?')
-parser.add_argument('--callback', metavar='callback',
-                    help='URL to callback when job completes.')
-parser.add_argument('--functions', metavar='functions',
-                    help='List of function names to call for this message, default all.', nargs='+')
-parser.add_argument('--redis_host', default='localhost',
-                    help='Hostname for the Redis backend, default to localhost')
-parser.add_argument('--namespace', default='mlq_default',
-                    help='Namespace of the queue')
-parser.add_argument('--server', action='store_true',
-                    help='Run a server')
-parser.add_argument('--server_address', default='127.0.0.1',
-                    help='Address for server to bind to. 127.0.0.1 is default which listens only on localhost, specify 0.0.0.0 to listen to all.')
-parser.add_argument('--server_port', default=5000,
-                    help='Port for server to listen at.')
+def set_args():
+    parser = argparse.ArgumentParser(description='Controller app for MLQ')
+    parser.add_argument('cmd', metavar='command', type=str,
+                        help='Command to run.', choices=['test_producer', \
+                        'test_consumer', 'test_reaper', 'test_all', 'clear_all',
+                        'post', 'consumer'])
+    parser.add_argument('msg', metavar='message', type=str,
+                        help='Message to post.', nargs='?')
+    parser.add_argument('--callback', metavar='callback',
+                        help='URL to callback when job completes.')
+    parser.add_argument('--functions', metavar='functions',
+                        help='List of function names to call for this message, default all.', nargs='+')
+    parser.add_argument('--redis_host', default='localhost',
+                        help='Hostname for the Redis backend, default to localhost')
+    parser.add_argument('--namespace', default='mlq_default',
+                        help='Namespace of the queue')
+    parser.add_argument('--server', action='store_true',
+                        help='Run a server')
+    parser.add_argument('--server_address', default='127.0.0.1',
+                        help='Address for server to bind to. 127.0.0.1 is default which listens only on localhost, specify 0.0.0.0 to listen to all.')
+    parser.add_argument('--server_port', default=5000,
+                        help='Port for server to listen at.')
+    return parser
 
 def my_producer_func(q):
     while True:
@@ -100,6 +103,8 @@ def server(mlq, address, port):
     @app.route('/jobs/<job_id>/result<extension>', methods=['GET'])
     def get_result(job_id, extension):
         job = mlq.redis.get(mlq.progress_q + '_' + job_id)
+        if not job:
+            raise NotFound
         try:
             job = msgpack.unpackb(job, raw=False)
             return str(job['result']) or '[no result]'
@@ -112,7 +117,10 @@ def server(mlq, address, port):
             return str(mlq.create_listener(request.json))
         if request.method == 'DELETE':
             return str(mlq.remove_listener(request.json))
-    app.run(host=address, port=port)
+    http_server = WSGIServer((address, int(port)), app)
+    print(port)
+    logging.info('Serving at {} port {}'.format(address, port))
+    http_server.serve_forever()
 
 async def main(args):
     mlq = MLQ(args.namespace, args.redis_host, 6379, 0)
@@ -148,6 +156,7 @@ async def main(args):
 
 if __name__ == '__main__':
     logging.getLogger().setLevel(logging.INFO)
+    parser = set_args()
     args = parser.parse_args()
     if args.cmd:
         asyncio.run(main(args))

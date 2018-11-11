@@ -12,6 +12,11 @@
 
 ## Usage over HTTP as a more flexible queue/worker system
 
+MLQ uses [gevent](http://www.gevent.org/index.html) (similar to gunicorn if you know that better) for a WSGI server.
+
+If you want to launch many servers -- which may not be necessary, you probably want one
+server but many workers -- don't try any special `gevent` magic, just see below.
+
 1. Launch one (or more) consumers:
 
 `python3 controller/app.py consumer --server`
@@ -30,6 +35,10 @@ Optional params:
 
 Note that if you are expanding `server_address` beyond 127.0.0.1, MLQ does not come
 with any authentication. It'd be open to the world (or the local reachable cluster/network).
+
+For multiple servers, you'll need to specify each with a different `server_port`. Nothing
+is automagically spun off into different threads. One server, one process, one port. Load
+balance it via nginx or your cloud provider, if you really need this. Hint: you probably don't.
 
 2. Give the consumer something to do
 
@@ -124,7 +133,8 @@ curl localhost:5001/jobs/53/result.mp3
 
 ### Can messages be lost?
 
-MLQ is designed with atomic transactions such that queued messages should not be lost.
+MLQ is designed with atomic transactions such that queued messages should not be lost (of course
+  this cannot be guaranteed).
 
 There is always the possibility that the backend Redis instance will go down, if
 you are concerned about this, I recommend looking into Redis AOF persistence.
