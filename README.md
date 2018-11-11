@@ -25,6 +25,11 @@ It's in Python 3.6+, is built on asyncio, and uses Redis as a queue backend.
 
 `pip install mlq`
 
+## Requirements
+
+You need access to a running Redis instance, for example `apt install redis-server` will get you one at localhost:6379,
+otherwise there is AWS's Elasticache and many other options.
+
 ## Job Lifecycle
 
 Submit, queued, worker picks up, some explanation of dead letter queue.
@@ -241,4 +246,5 @@ Dask and Celery are excellent, use them in preference to MLQ if you want to inve
 git clone https://github.com/tomgrek/mlq.git
 pip install -r requirements.txt
 source ./run_tests.sh
+python setup.py sdist upload
 ```
