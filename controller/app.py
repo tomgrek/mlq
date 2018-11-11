@@ -39,7 +39,7 @@ def set_args():
 def my_producer_func(q):
     while True:
         time.sleep(4)
-        q.post('ZIG')
+        q.post('a random message')
 
 def simple_consumer_func(msg, *args):
     time.sleep(4)
@@ -118,7 +118,6 @@ def server(mlq, address, port):
         if request.method == 'DELETE':
             return str(mlq.remove_listener(request.json))
     http_server = WSGIServer((address, int(port)), app)
-    print(port)
     logging.info('Serving at {} port {}'.format(address, port))
     http_server.serve_forever()
 

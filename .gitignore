@@ -1,4 +1,7 @@
 .pytest_cache
-__pycache
+__pycache__/
 .git
 *.pyc
+build/
+dist/
+

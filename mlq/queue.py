@@ -25,14 +25,16 @@ class MLQ():
         # msgs have a 64 bit id starting at 0
         self.id_key = self.q_name + '_max_id'
         self.id = str(uuid())
-        self.loop = asyncio.get_running_loop()
         self.redis = redis.StrictRedis(host=redis_host, port=redis_port, db=redis_db, decode_responses=True)
         logging.info('Connected to Redis at {}:{}'.format(redis_host, redis_port))
         self.pubsub = self.redis.pubsub(ignore_subscribe_messages=True)
-        self.pool = concurrent.futures.ThreadPoolExecutor()
         self.funcs_to_execute = []
         self.listener = None
         self.http = urllib3.PoolManager()
+
+    def _create_async_stuff(self):
+        self.loop = asyncio.get_running_loop()
+        self.pool = concurrent.futures.ThreadPoolExecutor()
 
     def _utility_functions(self):
         """These utilities are passed to listener functions. They allow those
@@ -105,6 +107,9 @@ class MLQ():
         """
         # TODO: Probably should be able to specify which worker will do what
         # functions. So also need an endpoint to get worker name.
+        if not self.loop or not self.pool:
+            self._create_async_stuff()
+
         if isinstance(function, dict):
             fun_bytes = jsonpickle.decode(json.dumps(function))
             function = cloudpickle.loads(fun_bytes)
@@ -189,6 +194,9 @@ class MLQ():
         """A thread to reap jobs that were too slow
         :param int call_how_often: How often reaper should be called, every [this] seconds
         :param int job_timeout: Jobs processing for longer than this will be requeued"""
+        if not self.loop or not self.pool:
+            self._create_async_stuff()
+
         def reaper():
             while True:
                 time.sleep(call_how_often)
