@@ -101,11 +101,16 @@ Results are stored indefinitely. Retrieve it by curl with something like:
 curl localhost:5001/jobs/53/result
 ```
 
-MLQ supports binary results, but to get them via curl you'll need to add ` --output -`.
+MLQ supports binary results, but to see them with curl you'll need to add ` --output -`. Because
+results are binary, they are returned just as bytes, so beware string comparisons and suchlike. Alternatively,
+you can hit the `/short_result` endpoint; `short_result` is always a string.
 
 To get the result within Python, it's just:
 
-
+```
+r = http.request('GET', 'localhost:5001/jobs/53/result')
+print(r.data)
+```
 
 Additionally, say for example your job's result was a generated image or waveform. Binary data,
 but you want it to be interpreted by the browser as say a JPG or WAV. You can add any
@@ -121,27 +126,8 @@ curl localhost:5001/jobs/53/result.mp3
 
 MLQ is designed with atomic transactions such that queued messages should not be lost.
 
-There is always the possibility that the backend Redis instance will go down
-
-
-Launch a test queue and listener with `python3 controller/app.py test_consumer --server`
-
-Define a function in python and add it to the consumer's listener with:
-
-`http.request('POST', 'localhost:5001/consumer', headers={'Content-Type':
-     ...: 'application/json'}, body=jsonpickle.encode(cloudpickle.dumps(my_function)))`
-
-Run a dummy app to see the callbacks happening:
-
-`python test_callback.py`
-
-Post something to the queue with
-
-`python controller/app.py post "a message" "localhost:5000/callbackurl"`
-
-Get a job result with
-
-
+There is always the possibility that the backend Redis instance will go down, if
+you are concerned about this, I recommend looking into Redis AOF persistence.
 
 ### Binary job results
 

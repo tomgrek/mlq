@@ -95,7 +95,7 @@ def server(mlq, address, port):
     def get_short_result(job_id):
         job = mlq.redis.get(mlq.progress_q + '_' + job_id)
         job = msgpack.unpackb(job, raw=False)
-        return job['short_result'] or '[no result]'
+        return str(job['short_result']) or '[no result]'
     @app.route('/jobs/<job_id>/result', defaults={'extension': None}, methods=['GET'])
     @app.route('/jobs/<job_id>/result<extension>', methods=['GET'])
     def get_result(job_id, extension):
