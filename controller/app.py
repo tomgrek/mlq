@@ -15,7 +15,7 @@ parser = argparse.ArgumentParser(description='Controller app for MLQ')
 parser.add_argument('cmd', metavar='command', type=str,
                     help='Command to run.', choices=['test_producer', \
                     'test_consumer', 'test_reaper', 'test_all', 'clear_all',
-                    'post'])
+                    'post', 'consumer'])
 parser.add_argument('msg', metavar='message', type=str,
                     help='Message to post.', nargs='?')
 parser.add_argument('--callback', metavar='callback',
@@ -28,6 +28,10 @@ parser.add_argument('--namespace', default='mlq_default',
                     help='Namespace of the queue')
 parser.add_argument('--server', action='store_true',
                     help='Run a server')
+parser.add_argument('--server_address', default='127.0.0.1',
+                    help='Address for server to bind to. 127.0.0.1 is default which listens only on localhost, specify 0.0.0.0 to listen to all.')
+parser.add_argument('--server_port', default=5000,
+                    help='Port for server to listen at.')
 
 def my_producer_func(q):
     while True:
@@ -59,7 +63,7 @@ def my_consumer_func(msg, *args):
     # return ('a short success', 'a longer success')
     return other_job_result
 
-def server(mlq):
+def server(mlq, address, port):
     app = Flask(__name__)
     @app.route('/healthz')
     def healthz():
@@ -98,7 +102,7 @@ def server(mlq):
         job = mlq.redis.get(mlq.progress_q + '_' + job_id)
         try:
             job = msgpack.unpackb(job, raw=False)
-            return job['result'] or '[no result]'
+            return str(job['result']) or '[no result]'
         except UnicodeDecodeError:
             job = msgpack.unpackb(job, raw=True)
             return job[b'result'] or '[no result]'
@@ -108,7 +112,7 @@ def server(mlq):
             return str(mlq.create_listener(request.json))
         if request.method == 'DELETE':
             return str(mlq.remove_listener(request.json))
-    app.run(host='0.0.0.0', port=5001)
+    app.run(host=address, port=port)
 
 async def main(args):
     mlq = MLQ(args.namespace, args.redis_host, 6379, 0)
@@ -117,6 +121,8 @@ async def main(args):
         print('Clearing everything in namespace {}'.format(args.namespace))
         for key in mlq.redis.scan_iter("{}*".format(args.namespace)):
             mlq.redis.delete(key)
+    elif command == 'consumer':
+        mlq.create_listener()
     elif command == 'test_consumer':
         print('Starting test consumer')
         mlq.create_listener(simple_consumer_func)
@@ -136,7 +142,7 @@ async def main(args):
         print('Posting message to queue.')
         mlq.post(args.msg, args.callback, args.functions)
     if args.server:
-        thread = Thread(target=server, args=[mlq])
+        thread = Thread(target=server, args=[mlq, args.server_address, args.server_port])
         thread.start()
     return mlq
 

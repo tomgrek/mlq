@@ -8,7 +8,121 @@
 
 `./run_tests.sh`
 
-## Usage
+## Usage as a fixed backend
+
+## Usage over HTTP as a more flexible queue/worker system
+
+1. Launch one (or more) consumers:
+
+`python3 controller/app.py consumer --server`
+
+There may be little benefit to running more than one server unless you are
+going to put some load balancer in front of them _and_ are expecting seriously
+high traffic. To run workers that don't have an HTTP interface -- they will
+still get messages that are sent to the first `--server` worker -- just leave
+off the `--server` parameter.
+
+Optional params:
+```
+--server_address 0.0.0.0 (if you want it to accept connections from outside localhost)
+--server_port 5000
+```
+
+Note that if you are expanding `server_address` beyond 127.0.0.1, MLQ does not come
+with any authentication. It'd be open to the world (or the local reachable cluster/network).
+
+2. Give the consumer something to do
+
+The consumer sits around waiting for messages, and when it receives one, runs the
+listener functions that you've specified on that message. The output of the last
+listener function is then stored as the result. So, you need to specify at least
+one listener function (unless that is you just want a queue for, say, logging purposes).
+
+Define a function:
+```
+def multiply(msg, *args):
+    print("I got a message: " + str(msg))
+    return msg['arg1'] * msg['arg2']
+```
+
+`msg` should be a string or dictionary type. The `args` dictionary gives
+access to the full message as-enqueued, including its id, the UUID of the worker that's
+processing it, the timestamp of when it was enqueued, as well as a bunch of utility functions
+useful for distributed processing. See later in this document.
+
+When you have the function defined, you need to `cloudpickle` then `jsonpickle` it to send it
+to the consumer as a HTTP POST. In Python, the code would be something like:
+
+```
+import cloudpickle
+import jsonpickle
+import urllib3
+http = urllib3.PoolManager()
+http.request('POST', 'localhost:5001/consumer',
+             headers={'Content-Type':'application/json'},
+             body=jsonpickle.encode(cloudpickle.dumps(multiply)))
+```
+
+Functions sent to workers should be unique by name. If you later decide you don't need
+that function any more, just make the same request but instead of POST, use DELETE.
+
+3. Send a message to the server
+
+If you're using the app tool, it's very easy:
+
+```
+python controller/app.py post '{"arg1": 6, "arg2": 3}'
+```
+
+If you're doing it from `curl` or direct from Python, you have to bear in mind that
+you need to POST a string which is a JSON object with at least a `msg` key. So, for example:
+
+```
+r = http.request('POST', 'localhost:5001/jobs',
+                 headers={'Content-Type':'application/json'},
+                 body=json.dumps({'msg':{'arg1':6, 'arg2':3}}))
+```
+
+From curl:
+```
+curl localhost:5001/jobs -X POST -d '{"msg": {"arg1": 6, "arg2": 3}}' -H 'Content-Type: application/json'
+```
+
+You'll get back the unique id of the enqueued request, which is an integer.
+
+Once processing is complete, if you passed a "callback" key in the POST body, that callback
+will be called with the (short) result and a success flag. But we didn't do that yet, so ...
+
+4. ... at some point in the future, get the result.
+
+Results are stored indefinitely. Retrieve it by curl with something like:
+
+```
+curl localhost:5001/jobs/53/result
+```
+
+MLQ supports binary results, but to get them via curl you'll need to add ` --output -`.
+
+To get the result within Python, it's just:
+
+
+
+Additionally, say for example your job's result was a generated image or waveform. Binary data,
+but you want it to be interpreted by the browser as say a JPG or WAV. You can add any
+file extension to the above URL so a user's browser would interpret it correctly. For example,
+the following are equivalent:
+```
+curl localhost:5001/jobs/53/result
+curl localhost:5001/jobs/53/result.mp3
+```
+
+
+### Can messages be lost?
+
+MLQ is designed with atomic transactions such that queued messages should not be lost.
+
+There is always the possibility that the backend Redis instance will go down
+
 
 Launch a test queue and listener with `python3 controller/app.py test_consumer --server`
 
@@ -27,7 +141,7 @@ Post something to the queue with
 
 Get a job result with
 
-`curl localhost:5001/jobs/53/result --output -`
+
 
 ### Binary job results
 

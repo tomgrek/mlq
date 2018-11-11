@@ -60,6 +60,10 @@ class MLQ():
             return self.post(msg, callback, functions)
 
         def block_until_result(job_id):
+            """Wait (within a listener function) until the result from another
+            queued item is available. This is blocking and as a result, dangerous:
+            if no other workers are available to process the inner message, the
+            outer processing will be blocked; so you need at least 2 workers"""
             wait_key = 'pub_' + str(job_id)
             self.pubsub.unsubscribe()
             self.pubsub.subscribe(wait_key)
@@ -89,7 +93,7 @@ class MLQ():
                 return True
         return False
 
-    def create_listener(self, function):
+    def create_listener(self, function=None):
         """Create a MLQ consumer that executes `function` on message received.
         :param func function: A function with the signature my_func(msg, *args).
         Msg is the posted message, optional args[0] inside the function gives access
@@ -104,7 +108,8 @@ class MLQ():
         if isinstance(function, dict):
             fun_bytes = jsonpickle.decode(json.dumps(function))
             function = cloudpickle.loads(fun_bytes)
-        self.funcs_to_execute.append(function)
+        if function:
+            self.funcs_to_execute.append(function)
         if self.listener:
             return True
         def listener():
