@@ -5,10 +5,13 @@ and want users to be able to re-train the model, and that takes a long time. Or
 perhaps even inference takes a long time. Long, relative to the responsiveness
 users expect from webapps, meaning, not immediate.
 
+You can't do this stuff direct from your Flask app, because it would lock up
+the app and not scale beyond a couple of users.
+
 The solution is to enqueue the user's request, and until then, show the user
 some loading screen, or tell them to check back in a few minutes. The ML stuff
-happens in the background, and when it's done, the user is notified (maybe via
-  websockets; maybe their browser is polling at intervals).
+happens in the background, in a separate process, or perhaps on a different machine.
+When it's done, the user is notified (maybe via websockets; maybe their browser is polling at intervals).
 
 Or perhaps your company has a limited resource, such as GPUs, and you need a solution
 for employees to access them from Jupyter one-by-one.
@@ -16,17 +19,19 @@ for employees to access them from Jupyter one-by-one.
 MLQ is designed to provide a performant, reliable, and most of all easy to use, queue and
 workers to solve the above common problems.
 
-It's in Python 3.6+, is built on asyncio, and uses Redis as a queue backend. 
+It's in Python 3.6+, is built on asyncio, and uses Redis as a queue backend.
 
-## Installing
+## Usage
 
-`pip install -r requirements.txt`
+`pip install mlq`
 
-## Testing
+## Job Lifecycle
 
-`./run_tests.sh`
+Submit, queued, worker picks up, some explanation of dead letter queue.
 
-## Usage as a fixed backend
+## Usage if your backend is Python
+
+
 
 ## Usage over HTTP as a more flexible queue/worker system
 
@@ -148,6 +153,66 @@ curl localhost:5001/jobs/53/result
 curl localhost:5001/jobs/53/result.mp3
 ```
 
+5. Add a callback
+
+When you enqueue a job, you can optionally pass a callback which will be called when
+the job is complete. Here, callback means a URL which will be HTTP GET'd.
+
+The user submits a job via your backend (Node, Flask, whatever), you return immediately --
+but create within your backend a callback URL that when it's hit, knows to signal
+something to the user.
+
+You pass the callback URL when you enqueue a job. It will receive the following arguments
+as a query string: `?success=[success]&job_id=[job_id]&short_result=[short_result]`
+
+* Success is 0 or 1 depending whether the listener functions errored (threw exceptions) or timeout'd, or
+if everything went smoothly.
+
+* Job ID is the ID of the job you received when you first submitted it. This makes it
+possible to have a single callback URL defined in your app, and handle callbacks
+dependent on the job id.
+
+* Short result is a string that can become part of a URL, returned from your listener
+function. For example, if you do some image processing and determine that the picture
+shows a 'widget', `short_result` might be `widget`.
+
+The end result is that you'll get a callback to something like
+[whatever URL you passed]?success=1&job_id=53&short_result=widget.
+
+It's possible three ways, depending if you're using the client app, Python directly, or HTTP calls:
+```
+mlq.post('message', callback='http://localhost:5001/some_callback')
+python3 controller/app.py post message --callback 'http://localhost:5001/some_callback'
+curl localhost:5001/jobs -X POST -H 'Content-Type: application/json' -d '{"msg":"message", "callback":'http://localhost:5001/some_callback'}'
+```
+
+## Listener functions: arguments and return values
+
+
+## Distributed Computing
+
+To aid in distributed computing, there are a number of additional conveniences in MLQ.
+
+* Specify what listener functions are called for a job.
+
+Normally, you add listener functions to a list, and they are all called any time a message
+comes in. In fact, 99% of the time you'll probably just add a single listener function to
+each consumer.
+
+That's not always desirable though: maybe from one listener function, you want to
+enqueue a partial result that's handled in another worker or two. (Workers share all listener
+  functions; at least the ones that were added since they came into existence.)
+
+To this end, you can specify a list of functions that are called for a particular message. Only
+those functions will be called when the message is dequeued into a listener function.
+
+As always, there are 3 possible ways to do it: pure Python, with the controller app, and via http.
+```
+mlq.post('message', functions=['my_func'])
+python3 controller/app.py post message --functions my_func
+curl localhost:5001/jobs -X POST -H 'Content-Type: application/json' -d '{"msg":"message", "functions":["my_func"]}'
+
+```
 
 ### Can messages be lost?
 
@@ -162,3 +227,18 @@ you are concerned about this, I recommend looking into Redis AOF persistence.
 Are supported. Results are available at e.g. `localhost:5001/jobs/53/result` but
 also at `localhost:5001/jobs/53/result.jpg`, `localhost:5001/jobs/53/result.mp3`,
 etc, so you can get a user's browser to interpret the binary in whatever way.
+
+### Why not Kafka, Celery, Dask, 0MQ, RabbitMQ, etc
+
+Primarily, simplicity and ease of use. While MLQ absolutely is suitable for a production system,
+it's easy and intuitive to get started with on a side project.
+
+Dask and Celery are excellent, use them in preference to MLQ if you want to invest the time.
+
+### Developing
+
+```
+git clone https://github.com/tomgrek/mlq.git
+pip install -r requirements.txt
+source ./run_tests.sh
+```
