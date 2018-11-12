@@ -9,6 +9,8 @@ import urllib3
 import time
 from uuid import uuid1 as uuid
 
+from werkzeug.exceptions import NotFound
+
 import msgpack
 import redis
 import jsonpickle
@@ -154,8 +156,6 @@ class MLQ():
                             all_ok = False
                             logging.error(e)
                             logging.info("Moving message {} to dead letter queue".format(msg_dict['id']))
-                            # TODO: requeue (write a requeue function) that will attempt
-                            # to retry callback if it hangs or response != 200
                             if msg_dict['callback']:
                                 self.http.request('GET', msg_dict['callback'], fields={
                                     'success': 0,
@@ -252,6 +252,26 @@ class MLQ():
                     if all_ok:
                         break
         self.loop.run_in_executor(self.pool, reaper)
+
+    def get_job(self, job_id):
+        job = self._redis.get(self.progress_q + '_' + job_id)
+        job = msgpack.unpackb(job, raw=False)
+        return job
+
+    def get_progress(self, job_id):
+        job = self._redis.get(self.progress_q + '_' + job_id)
+        if not job:
+            raise NotFound
+        job = msgpack.unpackb(job, raw=False)
+        if job['progress'] is None:
+            return '[queued; not started]'
+        if job['progress'] == 0:
+            return '[started]'
+        if job['progress'] == -1:
+            return '[failed]'
+        if job['progress'] == 100:
+            return '[completed]'
+        return str(job['progress'])
 
     def post(self, msg, callback=None, functions=None):
         msg_id = str(self._redis.incr(self.id_key))

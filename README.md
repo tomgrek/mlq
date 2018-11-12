@@ -160,7 +160,8 @@ curl localhost:5001/jobs/53/result.mp3
 5. Add a callback
 
 When you enqueue a job, you can optionally pass a callback which will be called when
-the job is complete. Here, callback means a URL which will be HTTP GET'd.
+the job is complete. Here, callback means a URL which will be HTTP GET'd. The URL will be
+attempted up to 3 times before MLQ gives up.
 
 The user submits a job via your backend (Node, Flask, whatever), you return immediately --
 but create within your backend a callback URL that when it's hit, knows to signal
@@ -169,8 +170,7 @@ something to the user.
 You pass the callback URL when you enqueue a job. It will receive the following arguments
 as a query string: `?success=[success]&job_id=[job_id]&short_result=[short_result]`
 
-* Success is 0 or 1 depending whether the listener functions errored (threw exceptions) or timeout'd, or
-if everything went smoothly.
+* Success is 0 or 1 depending whether the listener functions errored (threw exceptions) or timeout'd, or if everything went smoothly.
 
 * Job ID is the ID of the job you received when you first submitted it. This makes it
 possible to have a single callback URL defined in your app, and handle callbacks

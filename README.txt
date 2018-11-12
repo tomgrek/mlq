@@ -27,8 +27,7 @@ It's in Python 3.6+, is built on asyncio, and uses Redis as a queue backend.
 
 ## Requirements
 
-You need access to a running Redis instance, for example `apt install redis-server` will get you one at localhost:6379,
-otherwise there is AWS's Elasticache and many other options.
+You need access to a running Redis instance, for example `apt install redis-server` will get you one at localhost:6379, otherwise there is AWS's Elasticache and many other options.
 
 ## Job Lifecycle
 
@@ -193,6 +192,20 @@ curl localhost:5001/jobs -X POST -H 'Content-Type: application/json' -d '{"msg":
 
 ## Listener functions: arguments and return values
 
+Remember that if you write a listener function that imports other libraries, they need
+to be importable on whatever machines/Python environments the consumers are running on, too.
+
+## The reaper
+
+If a worker goes offline mid-job, that job would get stuck in limbo: it looks like someone picked it up, but it never finished. MLQ comes with a reaper that detects jobs that have been running for longer than a threshold, assumes the worker probably died, a requeues the job. It keeps a tally
+of how many times the job was requeued; if that's higher than some specified number, it'll move the job to the dead letter queue instead of requeuing it.
+
+The reaper runs at a specified interval. To create a reaper that runs once every 60s, checks for jobs running for longer than 300s (five minutes), and if they've been retried fewer than 5 times puts them back in the job queue:
+
+```
+mlq.create_reaper(call_how_often=60, job_timeout=300, max_retries=5)
+python3 controller/app.py --reaper --reaper_interval 60 --reaper_timeout 300 --reaper_retries 5
+```
 
 ## Distributed Computing
 
@@ -216,8 +229,31 @@ As always, there are 3 possible ways to do it: pure Python, with the controller 
 mlq.post('message', functions=['my_func'])
 python3 controller/app.py post message --functions my_func
 curl localhost:5001/jobs -X POST -H 'Content-Type: application/json' -d '{"msg":"message", "functions":["my_func"]}'
-
 ```
+
+* Store data and fetch data
+
+Listener functions can store and fetch data using Redis as the backend. This way, they
+can pass data between different workers perhaps on different machines: say you have a graph
+where one computation generates a single interim result that can then be simultaneously
+worked on by two other workers.
+
+These functions are passed as arguments to the listener function:
+
+`key = store_data(data, key=None, expiry=None)`: Data must be a string type. Key is the key
+in Redis that the data is stored at, leave at None to have MLQ generate a UUID for you. Expiry
+of the key (in seconds) is recommended. Returns the key at which data was stored.
+
+`data = fetch_data(data_key)`: Retrieve data stored in Redis at `data_key`.
+
+* Post a message to the queue from within a listener function
+
+The API is the same from within a listener function as it is for using the MLQ
+library directly: `job_id = post(msg, callback=None, functions=None)`
+
+* Block a listener function until the output from another listener function is available
+
+`result = block_until_result(job_id)`. Be careful using this if you have only one worker because all of the worker's execution will be blocked: it won't suspend, process the other job, and return.
 
 ### Can messages be lost?
 

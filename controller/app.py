@@ -93,17 +93,7 @@ def server(mlq, address, port, start_serving=True):
         return str(resp)
     @flask_app.route('/jobs/<job_id>/progress', methods=['GET'])
     def get_progress(job_id):
-        job = mlq._redis.get(mlq.progress_q + '_' + job_id)
-        job = msgpack.unpackb(job, raw=False)
-        if job['progress'] is None:
-            return '[queued; not started]'
-        if job['progress'] == 0:
-            return '[started]'
-        if job['progress'] == -1:
-            return '[failed]'
-        if job['progress'] == 100:
-            return '[completed]'
-        return str(job['progress'])
+        return mlq.get_progress(job_id)
     @flask_app.route('/jobs/<job_id>/short_result', methods=['GET'])
     def get_short_result(job_id):
         job = mlq._redis.get(mlq.progress_q + '_' + job_id)
