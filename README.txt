@@ -31,7 +31,15 @@ You need access to a running Redis instance, for example `apt install redis-serv
 
 ## Job Lifecycle
 
-Submit, queued, worker picks up, some explanation of dead letter queue.
+1. Submit a job with MLQ. Optionally, specify a callback URL that'll be hit, with some useful query params, once the job has been processed.
+2. Job goes into a queue managed by MLQ. Jobs are processed first-in, first-out (FIFO).
+3. Create a worker (or maybe a worker already exists). Optimally, create many workers. They all connect to a shared Redis instance.
+4. A worker (sorry, sometimes I call it a consumer), or many workers in parallel, will pick jobs out of the queue and process them by feeding them into listener functions that you define.
+5. As soon as a worker takes on the processing of some message/data, that message/data is moved into a processing queue. So, if the worker fails midway through, the message is not lost.
+6. Worker stores the output of its listener functions and hits the callback with a result. Optionally, a larger result -- perhaps binary -- is stored in Redis, waiting to be picked up and served by a backend API.
+7. Ask MLQ for the job result, if the callback was not enough for you.
+
+Alternatively, the worker might fail to process the job before it gets to step 6. Maybe the input data was invalid, maybe it was a bad listener function; whatever happened, there was an exception. MLQ will move the message into a dead letter queue - not lost, but waiting for you to fix the problem.
 
 ## Usage if your backend is Python
 

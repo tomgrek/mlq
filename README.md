@@ -31,13 +31,23 @@ You need access to a running Redis instance, for example `apt install redis-serv
 
 ## Job Lifecycle
 
-Submit, queued, worker picks up, some explanation of dead letter queue.
+1. Submit a job with MLQ. Optionally, specify a callback URL that'll be hit, with some useful query params, once the job has been processed.
+2. Job goes into a queue managed by MLQ. Jobs are processed first-in, first-out (FIFO).
+3. Create a worker (or maybe a worker already exists). Optimally, create many workers. They all connect to a shared Redis instance.
+4. A worker (sorry, sometimes I call it a consumer), or many workers in parallel, will pick jobs out of the queue and process them by feeding them into listener functions that you define.
+5. As soon as a worker takes on the processing of some message/data, that message/data is moved into a processing queue. So, if the worker fails midway through, the message is not lost.
+6. Worker stores the output of its listener functions and hits the callback with a result. Optionally, a larger result -- perhaps binary -- is stored in Redis, waiting to be picked up and served by a backend API.
+7. Ask MLQ for the job result, if the callback was not enough for you.
+
+Alternatively, the worker might fail to process the job before it gets to step 6. Maybe the input data was invalid, maybe it was a bad listener function; whatever happened, there was an exception. MLQ will move the message into a dead letter queue - not lost, but waiting for you to fix the problem.
+
+In another case, maybe the worker dies midway through processing a message. When that happens, also the job is not lost. It might just be a case of, for example, the spot instance price just jumped and your worker shut down. MLQ provides a reaper thread that can be run at regular intervals to requeue jobs whose processing has stalled. If the job is requeued enough times that it exceeds some threshold you've specified, something is wrong - it'll be moved to the dead letter queue.
 
 ## Usage if your backend is Python
 
 
 
-## Usage over HTTP as a more flexible queue/worker system
+## Usage over HTTP as a flexible queue/worker system
 
 MLQ uses [gevent](http://www.gevent.org/index.html) (similar to gunicorn if you know that better) for a WSGI server.
 
@@ -197,13 +207,16 @@ to be importable on whatever machines/Python environments the consumers are runn
 
 ## The reaper
 
-If a worker goes offline mid-job, that job would get stuck in limbo: it looks like someone picked it up, but it never finished. MLQ comes with a reaper that detects jobs that have been running for longer than a threshold, assumes the worker probably died, a requeues the job. It keeps a tally
+If a worker goes offline mid-job, that job would get stuck in limbo: it looks like someone picked it up, but it never finished. MLQ comes with a reaper that detects jobs that have been running for longer than a threshold, assumes the worker probably died, and requeues the job. It keeps a tally
 of how many times the job was requeued; if that's higher than some specified number, it'll move the job to the dead letter queue instead of requeuing it.
 
 The reaper runs at a specified interval. To create a reaper that runs once every 60s, checks for jobs running for longer than 300s (five minutes), and if they've been retried fewer than 5 times puts them back in the job queue:
 
 ```
+If you're using MLQ directly from Python:
 mlq.create_reaper(call_how_often=60, job_timeout=300, max_retries=5)
+
+If you're using MLQ from the command line:
 python3 controller/app.py --reaper --reaper_interval 60 --reaper_timeout 300 --reaper_retries 5
 ```
 
@@ -217,12 +230,9 @@ Normally, you add listener functions to a list, and they are all called any time
 comes in. In fact, 99% of the time you'll probably just add a single listener function to
 each consumer.
 
-That's not always desirable though: maybe from one listener function, you want to
-enqueue a partial result that's handled in another worker or two. (Workers share all listener
-  functions; at least the ones that were added since they came into existence.)
+That's not always desirable though: maybe from one listener function, you want to enqueue a partial result that's handled in another worker or two. (Workers share all listener functions; at least the ones that were added since they came into existence.)
 
-To this end, you can specify a list of functions that are called for a particular message. Only
-those functions will be called when the message is dequeued into a listener function.
+To this end, you can specify a list of functions that are called for a particular message. Only _those_ functions will be called when the message is dequeued into a listener function.
 
 As always, there are 3 possible ways to do it: pure Python, with the controller app, and via http.
 ```
@@ -257,11 +267,9 @@ library directly: `job_id = post(msg, callback=None, functions=None)`
 
 ### Can messages be lost?
 
-MLQ is designed with atomic transactions such that queued messages should not be lost (of course
-  this cannot be guaranteed).
+MLQ is designed with atomic transactions such that queued messages should not be lost (of course this cannot be guaranteed).
 
-There is always the possibility that the backend Redis instance will go down, if
-you are concerned about this, I recommend looking into Redis AOF persistence.
+There is always the possibility that the backend Redis instance will go down, if you are concerned about this, I recommend looking into Redis AOF persistence.
 
 ### Binary job results
 
