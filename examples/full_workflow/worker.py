@@ -5,10 +5,10 @@ from mlq.queue import MLQ
 
 mlq = MLQ('example_app', 'localhost', 6379, 0)
 
-def listener_func(number):
-    print(number)
-    time.sleep(5)
-    return number ** 2
+def listener_func(number_dict, *args):
+    print(number_dict['number'])
+    time.sleep(10)
+    return number_dict['number'] ** 2
 
 async def main():
     print("Running, waiting for messages.")

@@ -1,0 +1,48 @@
+<html>
+<head>
+  <title>MLQ Demo frontend</title>
+</head>
+<body>
+  <h1>MLQ Demo</h1>
+  <div>
+    <span>
+      Ask the ML model for an inference!
+    </span>
+    <input type="text" placeholder="Enter a number" id="numberText"/>
+    <button onclick="submitNumber()">Submit</button>
+  </div>
+  <div id="status" style="color: blue; font-size: 1.5rem;">
+  </div>
+  <button onclick="checkStatus()">Check Status</button>
+</body>
+<script>
+  let myJob = 0;
+  submitNumber = async () => {
+    numberText = document.getElementById('numberText').value;
+    let r = await fetch('http://localhost:3000/do_inference', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        number: parseFloat(numberText)
+      })
+    }).then(r => r.json());
+    myJob = r.job_id;
+    document.getElementById('status').innerText = 'The backend says: ' + r.msg;
+  }
+
+  checkStatus = async () => {
+    if (!myJob) {
+      alert('Please submit a number first');
+      return false;
+    }
+    let r = await fetch(`http://localhost:3000/status/${myJob}`).then(r => r.json());
+    document.getElementById('status').innerText = r.msg;
+    if (r.msg == '[completed]') {
+      r = await fetch(`http://localhost:3000/result/${myJob}`).then(r => r.json());
+      document.getElementById('status').innerText += ' with result: ' + r.short_result;
+    }
+  }
+</script>
+</html>

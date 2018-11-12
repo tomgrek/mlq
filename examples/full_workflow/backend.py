@@ -17,7 +17,7 @@ CALLBACK_URL = 'http://localhost:3000/callback'
 @app.route('/do_inference', methods=['POST'])
 def do_fake_inference():
     # The worker is configured to just return the passed-in number, squared.
-    # With a 30s delay to make it somewhat realistic!
+    # With a delay to make it somewhat realistic!
     assert request.json['number']
     job_id = mlq.post(request.json, CALLBACK_URL)
     return jsonify({'msg': 'Processing, check back soon.', 'job_id': job_id})
@@ -25,6 +25,11 @@ def do_fake_inference():
 @app.route('/status/<job_id>', methods=['GET'])
 def get_progress(job_id):
     return jsonify({'msg': mlq.get_progress(job_id)})
+
+@app.route('/result/<job_id>', methods=['GET'])
+def get_result(job_id):
+    job = mlq.get_job(job_id)
+    return jsonify({'short_result': job['short_result']})
 
 @app.route('/callback', methods=['GET'])
 def train_model():
