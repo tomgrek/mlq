@@ -17,11 +17,11 @@ import jsonpickle
 import cloudpickle
 
 class MLQ():
-    """Create a queue object"""
+    """Create an MLQ object"""
     def __init__(self, q_name, redis_host, redis_port, redis_db):
         self.q_name = q_name
         self.processing_q = self.q_name + '_processing'
-        self.progress_q = self.q_name + '_progress'
+        self.job_status_stem = self.q_name + '_progress_'
         self.jobs_refs_q = self.q_name + '_jobsrefs'
         self.dead_letter_q = self.q_name + '_deadletter'
         # msgs have a 64 bit id starting at 0
@@ -50,11 +50,11 @@ class MLQ():
             """Update a job's progress. Progress goes from None (not started yet
             by any worker), 0 (job started and user hasn't updated progress), -1
             (job failed and moved to dead letter queue), to 100 (finished)."""
-            progress_str = self._redis.get(self.progress_q + '_' + job_id)
+            progress_str = self._redis.get(self.job_status_stem + job_id)
             progress_dict = msgpack.unpackb(progress_str, raw=False)
             progress_dict['progress'] = progress
             new_record = msgpack.packb(progress_dict, use_bin_type=False)
-            self._redis.set(self.progress_q + '_' + job_id, new_record)
+            self._redis.set(self.job_status_stem + job_id, new_record)
             return True
 
         def store_data(data, key=None, expiry=None):
@@ -133,13 +133,11 @@ class MLQ():
             while True:
                 msg_str = self._redis.brpoplpush(self.q_name, self.processing_q, timeout=0)
                 msg_dict = msgpack.unpackb(msg_str, raw=False)
-                # update progress_q with worker id + time started
                 msg_dict['worker'] = self.id
                 msg_dict['processing_started'] = dt.timestamp(dt.utcnow())
                 msg_dict['progress'] = 0
                 new_record = msgpack.packb(msg_dict, use_bin_type=False)
-                self._redis.set(self.progress_q + '_' + str(msg_dict['id']), new_record)
-                # process msg ...
+                self._redis.set(self.job_status_stem + str(msg_dict['id']), new_record)
                 all_ok = True
                 short_result = None
                 utils = self._utility_functions()
@@ -150,8 +148,6 @@ class MLQ():
                     if msg_dict['functions'] is None or func.__name__ in msg_dict['functions']:
                         try:
                             result = func(msg_dict['msg'], utils)
-                            # end processing message
-                            # remove from progress_q ?? or keep along with result????
                         except Exception as e:
                             all_ok = False
                             logging.error(e)
@@ -165,7 +161,7 @@ class MLQ():
                             msg_dict['progress'] = -1
                             msg_dict['result'] = str(e)
                             new_record = msgpack.packb(msg_dict, use_bin_type=False)
-                            self._redis.set(self.progress_q + '_' + str(msg_dict['id']), new_record)
+                            self._redis.set(self.job_status_stem + str(msg_dict['id']), new_record)
                             self._redis.rpush(self.dead_letter_q, msg_str)
                 if all_ok:
                     logging.info('Completed job {}'.format(str(msg_dict['id'])))
@@ -181,16 +177,13 @@ class MLQ():
                     msg_dict['progress'] = 100
                     msg_dict['processing_finished'] = dt.timestamp(dt.utcnow())
                     new_record = msgpack.packb(msg_dict, use_bin_type=False)
-                    self._redis.set(self.progress_q + '_' + str(msg_dict['id']), new_record)
-                    # TODO: requeue (write a requeue function) that will attempt
-                    # to retry callback if it hangs or response != 20
+                    self._redis.set(self.job_status_stem + str(msg_dict['id']), new_record)
                     if msg_dict['callback']:
                         self.http.request('GET', msg_dict['callback'], fields={
                             'success': 1,
                             'job_id': str(msg_dict['id']),
                             'short_result': short_result
                         })
-                # TODO: rename progress_q to job_status
                 self._redis.lrem(self.processing_q, -1, msg_str)
                 self._redis.lrem(self.jobs_refs_q, 1, str(msg_dict['id']))
         logging.info('Created listener')
@@ -198,6 +191,7 @@ class MLQ():
         return True
 
     def job_count(self):
+        """Returns the number of jobs in the queue, including both processing jobs and not-yet-processing"""
         return self._redis.llen(self.q_name)
 
     def create_reaper(self, call_how_often=60, job_timeout=300, max_retries=5):
@@ -218,7 +212,7 @@ class MLQ():
                     job_keys = self._redis.lrange(self.jobs_refs_q, i, i + 5)
                     all_ok = True
                     for job_key in job_keys:
-                        progress_key = self.progress_q + '_' + job_key
+                        progress_key = self.job_status_stem + job_key
                         job_str = self._redis.get(progress_key)
                         if not job_str:
                             logging.warning('Found orphan job {}'.format(job_key))
@@ -240,26 +234,24 @@ class MLQ():
                                 pipeline.rpush(self.dead_letter_q, job['msg'])
                             else:
                                 job = msgpack.packb(job, use_bin_type=False)
-                                pipeline.set(self.progress_q + '_' + job_id, job)
+                                pipeline.set(self.job_status_stem + job_id, job)
                                 pipeline.lpush(self.q_name, job)
                             pipeline.lrem(self.jobs_refs_q, 1, job_id)
                             pipeline.rpush(self.jobs_refs_q, job_id)
                             pipeline.execute()
                             all_ok = False
-                            # call callback with failed + requeued status
-                            # increment retries and requeue to q_name
-                            # delete from processing queue
+                            # TODO: call callback with failed + requeued status
                     if all_ok:
                         break
         self.loop.run_in_executor(self.pool, reaper)
 
     def get_job(self, job_id):
-        job = self._redis.get(self.progress_q + '_' + job_id)
+        job = self._redis.get(self.job_status_stem + job_id)
         job = msgpack.unpackb(job, raw=False)
         return job
 
     def get_progress(self, job_id):
-        job = self._redis.get(self.progress_q + '_' + job_id)
+        job = self._redis.get(self.job_status_stem + job_id)
         if not job:
             raise NotFound
         job = msgpack.unpackb(job, raw=False)
@@ -295,6 +287,6 @@ class MLQ():
         }
         job = msgpack.packb(job, use_bin_type=False)
         pipeline.lpush(self.q_name, job)
-        pipeline.set(self.progress_q + '_' + msg_id, job)
+        pipeline.set(self.job_status_stem + msg_id, job)
         pipeline.execute()
         return msg_id
