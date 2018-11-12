@@ -17,7 +17,7 @@ def set_args():
     parser.add_argument('cmd', metavar='command', type=str,
                         help='Command to run.', choices=['test_producer', \
                         'test_consumer', 'test_reaper', 'test_all', 'clear_all',
-                        'post', 'consumer'])
+                        'post', 'consumer', 'dummy'])
     parser.add_argument('msg', metavar='message', type=str,
                         help='Message to post.', nargs='?')
     parser.add_argument('--callback', metavar='callback',
@@ -26,8 +26,18 @@ def set_args():
                         help='List of function names to call for this message, default all.', nargs='+')
     parser.add_argument('--redis_host', default='localhost',
                         help='Hostname for the Redis backend, default to localhost')
+    parser.add_argument('--redis_port', default=6379,
+                        help='Port for the Redis backend, default to 6379')
     parser.add_argument('--namespace', default='mlq_default',
                         help='Namespace of the queue')
+    parser.add_argument('--reaper', action='store_true',
+                        help='Run the reaper to harvest stalled jobs')
+    parser.add_argument('--reaper_interval', default=60,
+                        help='How often in seconds that the reaper should check for stalled jobs.')
+    parser.add_argument('--reaper_timeout', default=300,
+                        help='How long a job should be let run before assuming it failed and re-queueing.')
+    parser.add_argument('--reaper_retries', default=5,
+                        help='How many times reaper should requeue a job before moving it to dead letter queue.')
     parser.add_argument('--server', action='store_true',
                         help='Run a server')
     parser.add_argument('--server_address', default='127.0.0.1',
@@ -50,7 +60,7 @@ def my_consumer_func(msg, *args):
     print(msg)
     print('i was called! worker {} '.format(utils['full_message']['worker']))
     print('prcessing started at {}'.format(utils['full_message']['processing_started']))
-    data_id = utils['store_data']('some data to be stored and expire in 100 seconds', ex=100)
+    data_id = utils['store_data']('some data to be stored and expire in 100 seconds', expiry=100)
     print(data_id)
     time.sleep(3)
     print(utils['fetch_data'](data_id))
@@ -66,24 +76,24 @@ def my_consumer_func(msg, *args):
     # return ('a short success', 'a longer success')
     return other_job_result
 
-def server(mlq, address, port):
-    app = Flask(__name__)
-    @app.route('/healthz')
+def server(mlq, address, port, start_serving=True):
+    flask_app = Flask(__name__)
+    @flask_app.route('/healthz')
     def healthz():
         return 'ok'
-    @app.route('/jobs/count')
+    @flask_app.route('/jobs/count')
     def jobs_count():
         return str(mlq.job_count())
-    @app.route('/jobs', methods=['POST'])
+    @flask_app.route('/jobs', methods=['POST'])
     def post_msg():
         msg = request.json.get('msg', None)
         callback = request.json.get('callback', None)
         functions = request.json.get('functions', None)
         resp = mlq.post(msg, callback, functions)
         return str(resp)
-    @app.route('/jobs/<job_id>/progress', methods=['GET'])
+    @flask_app.route('/jobs/<job_id>/progress', methods=['GET'])
     def get_progress(job_id):
-        job = mlq.redis.get(mlq.progress_q + '_' + job_id)
+        job = mlq._redis.get(mlq.progress_q + '_' + job_id)
         job = msgpack.unpackb(job, raw=False)
         if job['progress'] is None:
             return '[queued; not started]'
@@ -94,15 +104,15 @@ def server(mlq, address, port):
         if job['progress'] == 100:
             return '[completed]'
         return str(job['progress'])
-    @app.route('/jobs/<job_id>/short_result', methods=['GET'])
+    @flask_app.route('/jobs/<job_id>/short_result', methods=['GET'])
     def get_short_result(job_id):
-        job = mlq.redis.get(mlq.progress_q + '_' + job_id)
+        job = mlq._redis.get(mlq.progress_q + '_' + job_id)
         job = msgpack.unpackb(job, raw=False)
         return str(job['short_result']) or '[no result]'
-    @app.route('/jobs/<job_id>/result', defaults={'extension': None}, methods=['GET'])
-    @app.route('/jobs/<job_id>/result<extension>', methods=['GET'])
+    @flask_app.route('/jobs/<job_id>/result', defaults={'extension': None}, methods=['GET'])
+    @flask_app.route('/jobs/<job_id>/result<extension>', methods=['GET'])
     def get_result(job_id, extension):
-        job = mlq.redis.get(mlq.progress_q + '_' + job_id)
+        job = mlq._redis.get(mlq.progress_q + '_' + job_id)
         if not job:
             raise NotFound
         try:
@@ -111,23 +121,26 @@ def server(mlq, address, port):
         except UnicodeDecodeError:
             job = msgpack.unpackb(job, raw=True)
             return job[b'result'] or '[no result]'
-    @app.route('/consumer', methods=['POST', 'DELETE'])
+    @flask_app.route('/consumer', methods=['POST', 'DELETE'])
     def consumer_index_routes():
         if request.method == 'POST':
             return str(mlq.create_listener(request.json))
         if request.method == 'DELETE':
             return str(mlq.remove_listener(request.json))
-    http_server = WSGIServer((address, int(port)), app)
-    logging.info('Serving at {} port {}'.format(address, port))
-    http_server.serve_forever()
+    if start_serving:
+        http_server = WSGIServer((address, int(port)), flask_app)
+        logging.info('Serving at {} port {}'.format(address, port))
+        http_server.serve_forever()
+    else:
+        return flask_app
 
 async def main(args):
-    mlq = MLQ(args.namespace, args.redis_host, 6379, 0)
+    mlq = MLQ(args.namespace, args.redis_host, int(args.redis_port), 0)
     command = args.cmd
     if command == 'clear_all':
         print('Clearing everything in namespace {}'.format(args.namespace))
-        for key in mlq.redis.scan_iter("{}*".format(args.namespace)):
-            mlq.redis.delete(key)
+        for key in mlq._redis.scan_iter("{}*".format(args.namespace)):
+            mlq._redis.delete(key)
     elif command == 'consumer':
         mlq.create_listener()
     elif command == 'test_consumer':
@@ -148,6 +161,8 @@ async def main(args):
     elif command == 'post':
         print('Posting message to queue.')
         mlq.post(args.msg, args.callback, args.functions)
+    if args.reaper:
+        mlq.create_reaper(args.reaper_interval, args.reaper_timeout, args.reaper_retries)
     if args.server:
         thread = Thread(target=server, args=[mlq, args.server_address, args.server_port])
         thread.start()
