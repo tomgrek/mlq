@@ -1,7 +1,6 @@
 .pytest_cache
 __pycache__/
 .git
-*.pyc
+*.py[cod]
 build/
 dist/
-
