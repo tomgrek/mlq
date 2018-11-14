@@ -1,5 +1,7 @@
 # MLQ, a queue for ML jobs
 
+MLQ is a job queueing system, and framework for workers to process queued jobs, providing an easy way to offload long running jobs to other computers.
+
 You've got an ML model and want to deploy it. Meaning that, you have a web app
 and want users to be able to re-train the model, and that takes a long time. Or
 perhaps even inference takes a long time. Long, relative to the responsiveness
@@ -29,6 +31,44 @@ It's in Python 3.6+, is built on asyncio, and uses Redis as a queue backend.
 
 You need access to a running Redis instance, for example `apt install redis-server` will get you one at localhost:6379, otherwise there is AWS's Elasticache and many other options.
 
+## Quick Start
+
+This assumes: you have a web app with a Python backend. For a complete example, see [here](https://github.com/tomgrek/mlq/tree/master/examples/full_workflow). In brief:
+
+```
+import time
+from mlq.queue import MLQ
+
+# Create MLQ: namespace, redis host, redis port, redis db
+mlq = MLQ('example_app', 'localhost', 6379, 0)
+
+job_id = mlq.post({'my_data': 1234})
+result = None
+while not result:
+    time.sleep(0.1)
+    job = mlq.get_job(job_id)
+    result = job['result']
+```
+
+Then, of course you need a worker, or many workers, processing the job. Somewhere else (another terminal, a screen session, another machine, etc):
+
+```
+import asyncio
+from mlq.queue import MLQ
+
+mlq = MLQ('example_app', 'localhost', 6379, 0)
+
+def simple_multiply(params_dict, *args):
+    return params_dict['my_data'] * 2
+
+async def main():
+    print("Running, waiting for messages.")
+    mlq.create_listener(simple_multiply)
+
+if __name__ == '__main__':
+    asyncio.run(main())
+```
+
 ## Job Lifecycle
 
 1. Submit a job with MLQ. Optionally, specify a callback URL that'll be hit, with some useful query params, once the job has been processed.
@@ -39,20 +79,52 @@ You need access to a running Redis instance, for example `apt install redis-serv
 6. Worker stores the output of its listener functions and hits the callback with a result. Optionally, a larger result -- perhaps binary -- is stored in Redis, waiting to be picked up and served by a backend API.
 7. Ask MLQ for the job result, if the callback was not enough for you.
 
-Alternatively, the worker might fail to process the job before it gets to step 6. Maybe the input data was invalid, maybe it was a bad listener function; whatever happened, there was an exception. MLQ will move the message into a dead letter queue - not lost, but waiting for you to fix the problem.
+Alternatively, the worker might fail to process the job before it gets to step 6. Maybe the input data was invalid, maybe it was a bad listener function; whatever happened, there was an exception:
 
-In another case, maybe the worker dies midway through processing a message. When that happens, also the job is not lost. It might just be a case of, for example, the spot instance price just jumped and your worker shut down. MLQ provides a reaper thread that can be run at regular intervals to requeue jobs whose processing has stalled. If the job is requeued enough times that it exceeds some threshold you've specified, something is wrong - it'll be moved to the dead letter queue.
+8. MLQ will move failed jobs into a dead letter queue - not lost, but waiting for you to fix the problem.
 
-## Usage if your backend is Python
+In another case, maybe the worker dies midway through processing a message. When that happens, also the job is not lost. It might just be a case of, for example, the spot instance price just jumped and your worker shut down. MLQ provides a [reaper](https://github.com/tomgrek/mlq#the-reaper) thread that can be run at regular intervals to requeue jobs whose processing has stalled. If the job is requeued enough times that it exceeds some threshold you've specified, something is wrong - it'll be moved to the dead letter queue.
 
+## Listener functions: arguments and return values
 
+When creating a worker, you (probably should) give it a listener function to execute on items pulled from the queue. In the example above, that function is called `simple_multiply`. Its signature is `simple_multiply(params_dict, *args)`. What is that?
 
-## Usage over HTTP as a flexible queue/worker system
+* `params_dict` is the original message that was pushed to the queue; in the example it'd be this dictionary: `{'my_data': 1234}`. It doesn't have to be a dict, rather, it's whatever you `post`ed to the queue, so it could be an `int` or a `string`; any serializable type (it needs to be serializable because in the Redis queue it has to be stored as a string). Speaking of which, internally, MLQ does its serialization with [MessagePack](https://msgpack.org/index.html), which supports binary and is faster than JSON.
+
+* `args` is a dict with several useful things in. Most of them are concerned with distributed computing utilities (documented below) and so can safely be ignored by most users. But, you also get access to the dict `args['full_message']` and the function `args['update_progress']`. The full message provides the queued message as MLQ sees it, including some possibly useful things:
+
+```
+{
+    'id': msg_id,
+    'timestamp': timestamp, # when the message was enqueued
+    'worker': None, # uuid of the worker it's being processed on (if any)
+    'processing_started': None, # when processing started on the worker
+    'processing_finished': None,
+    'progress': None, # an integer from -1 (failed), 0 (not started), to 100 (complete)
+    'short_result': None, # the stored short result (if any)
+    'result': None, # the stored full result (if any)
+    'callback': callback, # URL to callback, if any, that user specified when posting the message
+    'retries': 0, # how many times this job has attempted to be processed by workers and requeued
+    'functions': functions, # which listener function names should be called, default all of them
+    'msg': msg # the actual message
+}
+```
+
+After a worker completes processing, this same object (a serialized version of it, anyway) remains stored in Redis and (the de-serialized version of it) accessible using `mlq.get_result(job_id)`.
+
+You can update the progress of a message from within your listener function like so: `args['update_progress'](50)` where `50` represents 50% (but you can update with any stringify-able type). This is useful say if processing a job has two time consuming steps. So if you have a UI that's polling the backend for updates, after completing one of them, set progress to 50% - then the responsible backend endpoint can just call `mlq.get_progress(job_id)` (where `job_id` is the UUID that was returned from `mlq.post`) and it will get that 50% complete value which you can report to the client.
+
+#### The return value
+
+Remember that if you write a listener function that imports other libraries, they need
+to be importable on whatever machines/Python environments the consumers are running on, too.
+
+## Usage over HTTP
 
 MLQ uses [gevent](http://www.gevent.org/index.html) (similar to gunicorn if you know that better) for a WSGI server.
 
 If you want to launch many servers -- which may not be necessary, you probably want one
-server but many workers -- don't try any special `gevent` magic, just see below.
+server but many workers -- there's no need for any special `gevent` magic.
 
 1. Launch one (or more) consumers:
 
@@ -199,11 +271,6 @@ mlq.post('message', callback='http://localhost:5001/some_callback')
 python3 controller/app.py post message --callback 'http://localhost:5001/some_callback'
 curl localhost:5001/jobs -X POST -H 'Content-Type: application/json' -d '{"msg":"message", "callback":'http://localhost:5001/some_callback'}'
 ```
-
-## Listener functions: arguments and return values
-
-Remember that if you write a listener function that imports other libraries, they need
-to be importable on whatever machines/Python environments the consumers are running on, too.
 
 ## The reaper
 
