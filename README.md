@@ -21,7 +21,7 @@ for employees to access them from Jupyter one-by-one.
 MLQ is designed to provide a performant, reliable, and most of all easy to use, queue and
 workers to solve the above common problems.
 
-It's in Python 3.6+, is built on asyncio, and uses Redis as a queue backend.
+It's in Python 3.7+, is built on asyncio, and uses Redis as a queue backend.
 
 ## Usage
 
