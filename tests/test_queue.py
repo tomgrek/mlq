@@ -53,7 +53,7 @@ def test_q_set():
     q = asyncio.run(main(args))
     result = q._redis.set('test_mlq_ns:test_mlq_key', 'An artefact from MLQs tests')
     assert result
-    assert q._redis.get('test_mlq_ns:test_mlq_key') == 'An artefact from MLQs tests'
+    assert q._redis.get('test_mlq_ns:test_mlq_key').decode('utf-8') == 'An artefact from MLQs tests'
 
 def test_clear_all():
     args = set_args()

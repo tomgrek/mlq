@@ -3,3 +3,5 @@ redis==2.10.6
 urllib3
 cloudpickle
 jsonpickle
+flask
+gevent
