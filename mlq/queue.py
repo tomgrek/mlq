@@ -130,8 +130,14 @@ class MLQ():
         if self.listener:
             return True
         def listener():
-            while True:
+            shutdown = False
+            while not shutdown:
                 msg_str = self._redis.brpoplpush(self.q_name, self.processing_q, timeout=0)
+                if msg_str == b'shutdown':
+                    shutdown = True
+                    self._redis.lrem(self.processing_q, -1, msg_str)
+                    self.loop = None
+                    break
                 msg_dict = msgpack.unpackb(msg_str, raw=False)
                 msg_dict['worker'] = self.id
                 msg_dict['processing_started'] = dt.timestamp(dt.utcnow())
@@ -189,6 +195,10 @@ class MLQ():
         logging.info('Created listener')
         self.listener = self.loop.run_in_executor(self.pool, listener)
         return True
+
+    def shutdown(self):
+        """Stops the MLQ worker. Call create_listener to start it back up."""
+        self._redis.lpush(self.q_name, 'shutdown')
 
     def job_count(self):
         """Returns the number of jobs in the queue, including both processing jobs and not-yet-processing"""
@@ -248,6 +258,10 @@ class MLQ():
     def get_job(self, job_id):
         job = self._redis.get(self.job_status_stem + job_id)
         job = msgpack.unpackb(job, raw=False)
+        try:
+            job = json.loads(job)
+        except (TypeError, json.JSONDecodeError):
+            pass
         return job
 
     def get_progress(self, job_id):

@@ -18,7 +18,8 @@ def http():
 
 @pytest.fixture
 def mlq():
-    return MLQ('test_mlq_ns', 'localhost', 6379, 0)
+    queue = MLQ('test_mlq_ns', 'localhost', 6379, 0)
+    return queue
 
 is_server_running = False
 proc = None
@@ -67,3 +68,35 @@ def test_clear_all():
 def test_server_status(http, mlq, server):
     resp = http.request('GET', 'http://localhost:4999/healthz')
     assert resp.status == 200
+
+@pytest.mark.asyncio
+async def test_worker(mlq):
+    jobid = mlq.post(15)
+    progress = mlq.get_progress(jobid)
+    assert progress == '[queued; not started]'
+    async def add_listener():
+        def listener_func(item, *args):
+            return item * 2
+        mlq.create_listener(listener_func)
+        await asyncio.sleep(1)
+        mlq.remove_listener(listener_func)
+    await add_listener()
+    time.sleep(2)
+    result = mlq.get_job(jobid)
+    assert result['result'] == 30
+    mlq.shutdown()
+
+@pytest.mark.asyncio
+async def test_worker_2(mlq):
+    jobid = mlq.post({'hello': 'something'})
+    async def add_listener():
+        def listener_func(item, *args):
+            return item['hello']
+        mlq.create_listener(listener_func)
+        await asyncio.sleep(1)
+        mlq.remove_listener(listener_func)
+    await add_listener()
+    time.sleep(1)
+    result = mlq.get_job(jobid)
+    assert result['result'] == 'something'
+    mlq.shutdown()
