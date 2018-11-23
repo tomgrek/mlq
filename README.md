@@ -21,7 +21,7 @@ for employees to access them from Jupyter one-by-one.
 MLQ is designed to provide a performant, reliable, and most of all easy to use, queue and
 workers to solve the above common problems.
 
-It's in Python 3.7+, is built on asyncio, and uses Redis as a queue backend.
+It's in Python 3.6+, is built on asyncio, and uses Redis as a queue backend.
 
 ## Usage
 
@@ -120,6 +120,8 @@ Remember that if you write a listener function that imports other libraries, the
 to be importable on whatever machines/Python environments the consumers are running on, too.
 
 ## Usage over HTTP
+
+_Currently the server part requires Python 3.7_
 
 MLQ uses [gevent](http://www.gevent.org/index.html) (similar to gunicorn if you know that better) for a WSGI server.
 

@@ -37,7 +37,7 @@ class MLQ():
         self.pool = None
 
     def _create_async_stuff(self):
-        self.loop = asyncio.get_running_loop()
+        self.loop = asyncio.get_event_loop()
         self.pool = concurrent.futures.ThreadPoolExecutor()
 
     def _utility_functions(self):
