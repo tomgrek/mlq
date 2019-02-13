@@ -257,6 +257,8 @@ class MLQ():
 
     def get_job(self, job_id):
         job = self._redis.get(self.job_status_stem + job_id)
+        if not job:
+            raise NotFound
         job = msgpack.unpackb(job, raw=False)
         try:
             job = json.loads(job)
