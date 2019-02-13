@@ -68,6 +68,8 @@ def test_clear_all():
 def test_server_status(http, mlq, server):
     resp = http.request('GET', 'http://localhost:4999/healthz')
     assert resp.status == 200
+    resp = http.request('GET', 'http://localhost:4999/result/undefined')
+    assert resp.status == 404
 
 @pytest.mark.asyncio
 async def test_worker(mlq):
